@@ -6,6 +6,7 @@
   (:import (java.io File)))
 
 (defn- get-system-prop [prop-name]
+  {:post [(if % (.startsWith % "/") true)]}
   (System/getProperty prop-name))
 
 (defn- deep-merge [& xs]
@@ -16,7 +17,7 @@
     (apply merge-with deep-merge xs)
     (last xs)))
 
-(defn- load-edn
+(defn load-edn
   "If given a relative path, looks on classpath (via class loader) for the file, reads the content as EDN, and returns it.
   If the path is an absolute path, it reads it as EDN and returns that.
   If the resource is not found, returns nil."
@@ -34,8 +35,8 @@
       (throw (ex-info "please provide a valid file on your file-system"
                       {:file-path file-path}))))
 
-(def ^:private get-defaults open-config-file)
-(def ^:private get-config   open-config-file)
+(def  get-defaults open-config-file)
+(def  get-config   open-config-file)
 
 (defn- resolve-symbol [sym]
   {:pre  [(namespace sym)]
@@ -49,20 +50,18 @@
    it should look for configuration in case things are not found.
    Eg:
    - config-path is the location of the config file in case there was no system property
-   - defaults-path is the location of the defaults config file, it is overriden by the config file
    "
   ([] (load-config {}))
-  ([{:keys [config-path defaults-path]}]
-   {:pre [(if config-path (.startsWith config-path "/") true)]}
-   (let [defaults (get-defaults (or defaults-path              "config/defaults.edn"))
+  ([{:keys [config-path]}]
+   (let [defaults (get-defaults "config/defaults.edn")
          config   (get-config   (or (get-system-prop "config") config-path))]
      (->> (deep-merge defaults config)
           (transform (walker symbol?) resolve-symbol)))))
 
-(defrecord Config [value defaults-path config-path]
+(defrecord Config [value config-path]
   component/Lifecycle
   (start [this]
-    (let [config (load-config this)]
+    (let [config (or value (load-config config-path))]
       (assoc this :value config)))
   (stop [this]
     (assoc this :value nil)))
@@ -76,8 +75,11 @@
 
    This function can override a number of the above defaults with the parameters:
    - `config-path`: The location of the disk-based configuration file.
-   - `defaults-path`: To override the built-in app config `config/defaults.edn`. This can be a relative path (classpath-based loading)
    "
-  [config-path & [defaults-path]]
-  (map->Config {:defaults-path defaults-path
-                :config-path   config-path}))
+  [config-path]
+  (map->Config {:config-path config-path}))
+
+(defn raw-config
+  "Creates a configuration component using the value passed in,
+   it will NOT look for any config files."
+  [value] (map->Config {:value value}))

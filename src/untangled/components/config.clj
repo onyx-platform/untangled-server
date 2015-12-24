@@ -6,7 +6,6 @@
   (:import (java.io File)))
 
 (defn- get-system-prop [prop-name]
-  {:post [(if % (.startsWith % "/") true)]}
   (System/getProperty prop-name))
 
 (defn- deep-merge [& xs]
@@ -17,7 +16,7 @@
     (apply merge-with deep-merge xs)
     (last xs)))
 
-(defn- load-edn
+(defn load-edn
   "If given a relative path, looks on classpath (via class loader) for the file, reads the content as EDN, and returns it.
   If the path is an absolute path, it reads it as EDN and returns that.
   If the resource is not found, returns nil."
@@ -31,12 +30,14 @@
   "Calls load-edn on `file-path`,
    and throws an ex-info if that failed."
   [file-path]
-  (or (some-> file-path load-edn)
+  (or (when-let [cfg (some-> file-path load-edn)]
+        (println "Using config:" file-path)
+        cfg)
       (throw (ex-info "please provide a valid file on your file-system"
                       {:file-path file-path}))))
 
-(def ^:private get-defaults open-config-file)
-(def ^:private get-config   open-config-file)
+(def  get-defaults open-config-file)
+(def  get-config   open-config-file)
 
 (defn- resolve-symbol [sym]
   {:pre  [(namespace sym)]
@@ -61,7 +62,7 @@
 (defrecord Config [value config-path]
   component/Lifecycle
   (start [this]
-    (let [config (or value (load-config config-path))]
+    (let [config (or value (load-config {:config-path config-path}))]
       (assoc this :value config)))
   (stop [this]
     (assoc this :value nil)))

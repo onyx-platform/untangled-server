@@ -1,6 +1,6 @@
 (defproject navis/untangled-server "0.6.3-SNAPSHOT"
   :description "Library for creating Untangled web servers"
-  :url ""
+  :url "https://github.com/untangled-web/untangled-server"
   :license {:name "MIT"
             :url  "https://opensource.org/licenses/MIT"}
   :dependencies [[org.clojure/clojure "1.8.0" :scope "provided"]
@@ -27,7 +27,7 @@
                  [commons-codec "1.10"]
                  [crypto-equality "1.0.0"]]
 
-  :plugins [[com.jakemccrary/lein-test-refresh "0.15.0"]]
+  :plugins [[com.jakemccrary/lein-test-refresh "0.17.0"]]
 
   :source-paths ["src"]
   :test-paths ["specs" "specs/config"]

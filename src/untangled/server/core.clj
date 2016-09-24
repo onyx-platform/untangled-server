@@ -4,6 +4,7 @@
             [untangled.server.impl.components.config :as config]
             [untangled.server.impl.components.access-token-handler :as access-token-handler]
             [untangled.server.impl.components.openid-mock-server :as openid-mock-server]
+            [untangled.server.impl.pretty-system :as pretty-system]
             [com.stuartsierra.component :as component]
             [clojure.data.json :as json]))
 
@@ -109,9 +110,13 @@
 
   *`app-name`           OPTIONAL, a string that will turn \"\\api\" into \"<app-name>\\api\"
 
+  *`pretty/big-data`    OPTIONAL, a set of keywords in the system to only log when start fails if the timbre level is trace
+
   Returns a Sierra system component.
   "
-  [& {:keys [config-path components parser parser-injections extra-routes app-name]
+  [& {:keys [app-name config-path parser parser-injections
+             components extra-routes
+             pretty/big-data]
       :or {config-path "/usr/local/etc/untangled.edn"}}]
   {:pre [(some-> parser fn?)
          (or (nil? components) (map? components))
@@ -123,13 +128,20 @@
                              :handler handler
                              :server (make-web-server)]
         all-components (flatten (concat built-in-components components))]
-    (apply component/system-map all-components)))
+    (prn :big-data big-data)
+    (pretty-system/wrap-system
+      (apply component/system-map all-components)
+      :pretty/big-data big-data)))
 
 (defn make-untangled-test-server
   "Make sure to inject a :seeder component in the group of components that you pass in!"
-  [& {:keys [parser parser-injections components]}]
+  [& {:keys [parser parser-injections
+             components
+             pretty/big-data]}]
   (let [handler (handler/build-handler parser parser-injections)
         built-in-components [:config (new-config "test.edn")
                              :handler handler]
         all-components (flatten (concat built-in-components components))]
-    (apply component/system-map all-components)))
+    (pretty-system/wrap-system
+      (apply component/system-map all-components)
+      :pretty/big-data big-data)))

@@ -94,37 +94,11 @@
   [translations query]
   (walk/postwalk-replace translations query))
 
-(def om-query [:db/id :tag/type
-               {:tag/name [:db/id :language/locale :localized-string/value]}
-               {:tag/description [:db/id :language/locale :localized-string/value]}
-               {:tag/parents '...}])
-
-(def desired-result {:columns-to-select [:tag.1/id :tag.1/type
-                                         :translation.2/id :translation.2/locale :translation.2/localized-string
-                                         :translation.3/id :translation.3/locale :translation.3/localized-string
-                                         :tag-tag.4/parent-tag-id]
-                     :joins             [{:tag/name {:db-prop    :tag/name
-                                                     :from-alias 1
-                                                     :to-alias   2
-                                                     :from       :tag/name-id
-                                                     :to         :translation/i18n-string-id
-                                                     :carinality :many}
-                                          }
-                                         {:tag/description {:db-prop    :tag/description
-                                                            :from-alias 1
-                                                            :to-alias   3
-                                                            :from       :tag/name-id
-                                                            :to         :translation/i18n-string-id
-                                                            :carinality :many}}
-                                         {:tag/parents {:db-prop    :tag/parents
-                                                        :from-alias 1
-                                                        :to-alias   4
-                                                        :from       :tag/id
-                                                        :to         :tag-tag/tag-id
-                                                        :carinality :many}}
-                                         ]})
-
-(defn db-query [schema om-query] (omprops->dbprops (get schema :omprop->dbprop {}) om-query))
+(defn db-query
+  "Convert an om query to an equivalent om format query, but with the properties renamed to match the SQL database table
+  and column names"
+  [schema om-query]
+  (omprops->dbprops (get schema :omprop->dbprop {}) om-query))
 
 (defn query-attributes
   "Returns the top-level attributes of the given query (without db/id) as a vector."
@@ -141,7 +115,9 @@
         keys (query-attributes dbquery)]
     (first (map namespace keys))))
 
-(defn column [schema db-query-item table suffix]
+(defn column
+  "Convert a property to an SQL column selector that has suffix in order to allow selecting from the same table more than once."
+  [schema db-query-item table suffix]
   (cond
     (= :db/id db-query-item) (keyword (str table "." suffix) "id")
     (keyword? db-query-item) (if (= (namespace db-query-item) table)
@@ -158,7 +134,9 @@
 
 (defn next-suffix
   "Takes the current suffix. If nest? is false, increments the last component of the suffix. If nest? is true, adds
-  a new sequence to the end of the suffix starting at 1."
+  a new sequence to the end of the suffix starting at 1.
+
+  1 -no_nest-> 2 -nest-> 2.1"
   [current-suffix nest?]
   (if current-suffix
     (if nest?
@@ -194,7 +172,8 @@
     (next-suffix "2.1" true) => "2.1.1"
     (next-suffix "2.1.1" true) => "2.1.1.1"))
 
-(defn columns* [schema db-query suffix]
+(defn- columns*
+  [schema db-query suffix]
   (assert (vector? db-query) "Query input must be a vector")
   (reduce (fn [{:keys [join-suffix cols] :as acc} item]
             (let [table (table-for-query schema db-query)]
@@ -205,10 +184,14 @@
                                :join-suffix (next-suffix join-suffix false)})
                 :else (throw (ex-info "Unexpected query item" {:item item}))))) {:cols [] :join-suffix (next-suffix suffix true)} db-query))
 
-(defn columns [schema om-query] (:cols (columns* schema (db-query schema om-query) "1")))
+(defn columns
+  "Get all of the properly suffixed SQL columns that must be queried in order to satisfy the given om-query"
+  [schema om-query]
+  (:cols (columns* schema (db-query schema om-query) "1")))
 
 (defn join
-  "Give back a join d"
+  "Give back a join specification for a specific join element from a query. from-suffix is the
+  suffix of the table that the join is going FROM, and target-suffix is the current suffix to use on the TO table."
   [schema db-join-element from-suffix target-suffix]
   (assert (map? db-join-element) "Asked to generate join info for a non-map")
   (let [join-prop (first (keys db-join-element))
@@ -233,13 +216,19 @@
               )) {:joins [] :current-suffix (next-suffix outer-suffix true)} db-query))
 
 (defn joins
-  "Convert an om query into a sequence of join specifications. Follows alias sequence of columns."
+  "Convert an om query into a sequence of join specifications. Follows alias sequence of columns so that join aliasing will
+  match that of the columns."
   [schema om-query]
   (:joins (joins* schema (db-query schema om-query) "1")))
 
-(defn kw->sql [kw] (-> kw str (str/replace #"[-]" "_")))
+(defn kw->sql
+  "Convert a keyword to the name we use in SQL. Replaces - with _."
+  [kw]
+  (-> kw str (str/replace #"[-]" "_")))
 
-(defn left-join [spec]
+(defn left-join
+  "Given a join spec, emit a SQL LEFT JOIN clause."
+  [spec]
   (let [{:keys [from to from-alias to-alias]} spec
         from-table (kw->sql (namespace from))
         from-alias (kw->sql (str from-table "." from-alias))
@@ -252,6 +241,7 @@
             to-table to-alias from-alias from-col to-alias to-col)))
 
 (defn join-clause
+  "Given the columns and join specs returns an SQL FROM clause"
   [cols join-specs]
   (let [table-name #(str/replace % #"[.].*$" "")
         top-tables (filter #(re-matches #"^[^.]*[.][^.]*$" %) (distinct (map namespace cols)))
@@ -262,16 +252,21 @@
     (str initial-from " " left-joins)))
 
 (defn col->sel
+  "Convert a suffixed column selection keyword to a properly aliased SQL column selector."
   [col]
   (let [nspc (kw->sql (namespace col))
         col-name (kw->sql (name col))]
     (format "\"%s\".%s AS \"%s/%s\"" nspc col-name nspc col-name)))
 
 (defn select-clause
+  "Given a sequence of suffixed column keywords, returns the complete SQL selection items clause."
   [cols]
   (str/join ", " (map col->sel cols)))
 
-(defn om->sql [schema om-query]
+(defn om->sql
+  "Given a schema describing the Om -> SQL name mapping and join descriptions, returns an unconstrained SQL
+  statement that can be used to select data in a format that can be converted to a tree by `table->tree`."
+  [schema om-query]
   (let [cols (columns schema om-query)
         join-specs (joins schema om-query)]
     (str "SELECT " (select-clause cols) " " (join-clause cols join-specs))))

@@ -1,7 +1,8 @@
 (ns untangled.server.sql
   "Support functions for dealing with SQL results in the context of Om responses"
   (:require [clojure.walk :as walk]
-            [om.next :as om]))
+            [om.next :as om]
+            [clojure.string :as str]))
 
 (defn- decode-row [codecs row]
   (reduce (fn [row [k v]]
@@ -214,3 +215,162 @@
         graph (replace-temp-keys replace keyed-graph)
         denormalized-graph (om/db->tree [{db-key om-query}] graph graph)]
     (get denormalized-graph db-key)))
+
+(defn omprops->dbprops
+  "Transform an Om query to use local db table/column names"
+  [translations query]
+  (walk/postwalk-replace translations query))
+
+(defn db-query
+  "Convert an om query to an equivalent om format query, but with the properties renamed to match the SQL database table
+  and column names"
+  [schema om-query]
+  (omprops->dbprops (get schema :omprop->dbprop {}) om-query))
+
+(defn query-attributes
+  "Returns the top-level attributes of the given query (without db/id) as a vector."
+  [query]
+  (into [] (keep (fn [i] (cond
+                           (map? i) (first (keys i))
+                           (= :db/id i) nil
+                           :else i)) query)))
+
+(defn table-for-query
+  "Returns the table of the top-level properties of the given query as a string."
+  [schema om-query]
+  (let [dbquery (db-query schema om-query)
+        keys (query-attributes dbquery)]
+    (first (map namespace keys))))
+
+(defn column
+  "Convert a property to an SQL column selector that has suffix in order to allow selecting from the same table more than once."
+  [schema db-query-item table suffix]
+  (cond
+    (= :db/id db-query-item) (keyword (str table "." suffix) "id")
+    (keyword? db-query-item) (if (= (namespace db-query-item) table)
+                               (let [nspc (str table "." suffix)
+                                     nm (name db-query-item)]
+                                 (keyword nspc nm))
+                               (throw (ex-info (str "Query property " db-query-item " is on the wrong table. Conversion failed") {})))
+    :else (throw (ex-info "Columns must be represented as keywords" {}))))
+
+(defn next-suffix
+  "Takes the current suffix. If nest? is false, increments the last component of the suffix. If nest? is true, adds
+  a new sequence to the end of the suffix starting at 1.
+
+  1 -no_nest-> 2 -nest-> 2.1"
+  [current-suffix nest?]
+  (if current-suffix
+    (if nest?
+      (str current-suffix ".1")
+      (let [current-suffix (str current-suffix)
+            components (str/split current-suffix #"[.]")
+            last-component (last components)
+            lc-n (inc (Integer/parseInt last-component))
+            new-components (-> components
+                               reverse
+                               rest
+                               (conj (str lc-n))
+                               reverse)]
+        (str/join "." new-components)))
+    "1"))
+
+(defn- columns*
+  [schema db-query suffix]
+  (assert (vector? db-query) "Query input must be a vector")
+  (reduce (fn [{:keys [join-suffix cols] :as acc} item]
+            (let [table (table-for-query schema db-query)]
+              (cond
+                (keyword? item) (assoc acc :cols (conj cols (column schema item table suffix)))
+                (map? item) (let [subquery (first (vals item))]
+                              {:cols        (into cols (:cols (columns* schema subquery join-suffix)))
+                               :join-suffix (next-suffix join-suffix false)})
+                :else (throw (ex-info "Unexpected query item" {:item item}))))) {:cols [] :join-suffix (next-suffix suffix true)} db-query))
+
+(defn columns
+  "Get all of the properly suffixed SQL columns that must be queried in order to satisfy the given om-query"
+  [schema om-query]
+  (:cols (columns* schema (db-query schema om-query) "1")))
+
+(defn join
+  "Give back a join specification for a specific join element from a query. from-suffix is the
+  suffix of the table that the join is going FROM, and target-suffix is the current suffix to use on the TO table."
+  [schema db-join-element from-suffix target-suffix]
+  (assert (map? db-join-element) "Asked to generate join info for a non-map")
+  (let [join-prop (first (keys db-join-element))
+        schema-by-dbprop (into {} (map (fn [item] [(:db-prop item) item]) (:joins schema)))
+        join-spec (or (get schema-by-dbprop join-prop) (throw (ex-info "Om join has no join config" {:join join-prop})))
+        join-spec-instance (assoc join-spec :from-alias from-suffix :to-alias target-suffix)]
+    join-spec-instance))
+
+(defn joins*
+  [schema db-query outer-suffix]
+  (assert (vector? db-query) "Queries must be vectors.")
+  (reduce (fn [{:keys [joins current-suffix] :as acc} i]
+            (cond
+              (keyword? i) {:joins joins :current-suffix current-suffix}
+              (map? i) (let [subquery (first (vals i))
+                             nsuffix (next-suffix current-suffix false)]
+                         {:current-suffix nsuffix
+                          :joins          (-> joins
+                                              (conj (join schema i outer-suffix current-suffix))
+                                              (into (:joins (joins* schema subquery current-suffix))))})
+              :else acc
+              )) {:joins [] :current-suffix (next-suffix outer-suffix true)} db-query))
+
+(defn joins
+  "Convert an om query into a sequence of join specifications. Follows alias sequence of columns so that join aliasing will
+  match that of the columns."
+  [schema om-query]
+  (:joins (joins* schema (db-query schema om-query) "1")))
+
+(defn kw->sql
+  "Convert a keyword to the name we use in SQL. Replaces - with _."
+  [kw]
+  (-> kw str (str/replace #"[-]" "_")))
+
+(defn left-join
+  "Given a join spec, emit a SQL LEFT JOIN clause."
+  [spec]
+  (let [{:keys [from to from-alias to-alias]} spec
+        from-table (kw->sql (namespace from))
+        from-alias (kw->sql (str from-table "." from-alias))
+        to-table (kw->sql (namespace to))
+        to-alias (kw->sql (str to-table "." to-alias))
+        from-col (kw->sql (name from))
+        to-col (kw->sql (name to))
+        ]
+    (format "LEFT JOIN %s \"%s\" ON \"%s\".%s = \"%s\".%s"
+            to-table to-alias from-alias from-col to-alias to-col)))
+
+(defn join-clause
+  "Given the columns and join specs returns an SQL FROM clause"
+  [cols join-specs]
+  (let [table-name #(str/replace % #"[.].*$" "")
+        top-tables (filter #(re-matches #"^[^.]*[.][^.]*$" %) (distinct (map namespace cols)))
+        table-names (map table-name top-tables)
+        table-clauses (map (fn [n alias] (str n " \"" alias "\"")) table-names top-tables)
+        initial-from (str "FROM " (str/join "," table-clauses))
+        left-joins (str/join " " (map left-join join-specs))]
+    (str initial-from " " left-joins)))
+
+(defn col->sel
+  "Convert a suffixed column selection keyword to a properly aliased SQL column selector."
+  [col]
+  (let [nspc (kw->sql (namespace col))
+        col-name (kw->sql (name col))]
+    (format "\"%s\".%s AS \"%s/%s\"" nspc col-name nspc col-name)))
+
+(defn select-clause
+  "Given a sequence of suffixed column keywords, returns the complete SQL selection items clause."
+  [cols]
+  (str/join ", " (map col->sel cols)))
+
+(defn om->sql
+  "Given a schema describing the Om -> SQL name mapping and join descriptions, returns an unconstrained SQL
+  statement that can be used to select data in a format that can be converted to a tree by `table->tree`."
+  [schema om-query]
+  (let [cols (columns schema om-query)
+        join-specs (joins schema om-query)]
+    (str "SELECT " (select-clause cols) " " (join-clause cols join-specs))))
+

@@ -4,19 +4,28 @@
             [om.next :as om]
             [clojure.string :as str]))
 
-(defn- decode-row [codecs row]
+(defn- kw->sql
+  "Convert a keyword to the name we use in SQL. Replaces - with _."
+  [kw]
+  (-> kw str (str/replace #"[-]" "_")))
+
+(defn- decode-row
+  [codecs row]
   (reduce (fn [row [k v]]
             (if-let [codec (get-in codecs [k :in])]
               (assoc row k (codec v))
               row)) row row))
 
-(defn decode-rows [rows codecs]
+(defn decode-rows
+  [rows codecs]
   (map (partial decode-row codecs) rows))
 
-(defn- build-ident [kw row]
+(defn- build-ident
+  [kw row]
   [kw (get row kw)])
 
-(defn- get-entity [ns row]
+(defn- get-entity
+  [ns row]
   (let [ns (name ns)]
     (reduce (fn [entity [k v]]
               (if (= ns (namespace k))
@@ -67,18 +76,18 @@
   (clojure.walk/postwalk (fn [x] (cond
                                    (and (vector? x) (= nil (last x))) nil
                                    (and (vector? x) (= kword (first x))) [kword (keyword (str kword-value (last x)))]
-                                   :else x
-                                   )) form))
+                                   :else x))
+                         form))
 
 (defn postwalk-prepare-dates
   [kword form]
   (clojure.walk/postwalk (fn [x] (if (and (vector? x) (= kword (first x)))
                                    [kword ((symbol "#inst") (second x))]
-                                   x) ) form))
+                                   x)) form))
+
 
 (defn replace-keywords-and-nulls-for-map [m col]
   (reduce #(postwalk-update-values-remove-nulls (first %2) (second %2) %1) m col))
-
 
 (defn- decode-graph-edge
   "Add a graph edge to the given graph-db (which must already have the entities in it).
@@ -97,7 +106,7 @@
         from-ident [from-id-kw from-id]
         to-id (get row to)
         ;if single arity and doesn't have an id (i.e. no ident) use a map else vector
-        to-ident (if (and (= :one arity) (not= "id" (name to))) {to to-id}[to to-id])
+        to-ident (if (and (= :one arity) (not= "id" (name to))) {to to-id} [to to-id])
         valid-idents? (and to-id from-id)]
     (if valid-idents?
       (if (= :many arity)
@@ -131,13 +140,6 @@
   [replacements graph]
   (walk/postwalk-replace replacements graph))
 
-;; END Table->Tree helpers
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; TODO:
-;; - Add a dev card example.
-;; - Make potentially useful private helpers public.
-;; - Write more tests!
 (defn table->tree
   "Transform flat SQL query results into graph data required by the client.
 
@@ -216,18 +218,18 @@
         denormalized-graph (om/db->tree [{db-key om-query}] graph graph)]
     (get denormalized-graph db-key)))
 
-(defn omprops->dbprops
+(defn- omprops->dbprops
   "Transform an Om query to use local db table/column names"
   [translations query]
   (walk/postwalk-replace translations query))
 
-(defn db-query
+(defn- db-query
   "Convert an om query to an equivalent om format query, but with the properties renamed to match the SQL database table
   and column names"
   [schema om-query]
   (omprops->dbprops (get schema :omprop->dbprop {}) om-query))
 
-(defn query-attributes
+(defn- query-attributes
   "Returns the top-level attributes of the given query (without db/id) as a vector."
   [query]
   (into [] (keep (fn [i] (cond
@@ -235,14 +237,14 @@
                            (= :db/id i) nil
                            :else i)) query)))
 
-(defn table-for-query
+(defn- table-for-query
   "Returns the table of the top-level properties of the given query as a string."
   [schema om-query]
   (let [dbquery (db-query schema om-query)
         keys (query-attributes dbquery)]
     (first (map namespace keys))))
 
-(defn column
+(defn- column
   "Convert a property to an SQL column selector that has suffix in order to allow selecting from the same table more than once."
   [schema db-query-item table suffix]
   (cond
@@ -254,7 +256,7 @@
                                (throw (ex-info (str "Query property " db-query-item " is on the wrong table. Conversion failed") {})))
     :else (throw (ex-info "Columns must be represented as keywords" {}))))
 
-(defn next-suffix
+(defn- next-suffix
   "Takes the current suffix. If nest? is false, increments the last component of the suffix. If nest? is true, adds
   a new sequence to the end of the suffix starting at 1.
 
@@ -275,6 +277,14 @@
         (str/join "." new-components)))
     "1"))
 
+(defn table-name
+  "Takes a kw that is being used as an alias for a table/column (possibly suffixed for join clarification)
+  and returns just the table name. e.g. :table.1.1/a => \"table\""
+  [kw]
+  (let [name (namespace kw)
+        base-name (str/replace name #"[.].*$" "")]
+    base-name))
+
 (defn- columns*
   [schema db-query suffix]
   (assert (vector? db-query) "Query input must be a vector")
@@ -287,12 +297,12 @@
                                :join-suffix (next-suffix join-suffix false)})
                 :else (throw (ex-info "Unexpected query item" {:item item}))))) {:cols [] :join-suffix (next-suffix suffix true)} db-query))
 
-(defn columns
+(defn- columns
   "Get all of the properly suffixed SQL columns that must be queried in order to satisfy the given om-query"
   [schema om-query]
   (:cols (columns* schema (db-query schema om-query) "1")))
 
-(defn join
+(defn- join
   "Give back a join specification for a specific join element from a query. from-suffix is the
   suffix of the table that the join is going FROM, and target-suffix is the current suffix to use on the TO table."
   [schema db-join-element from-suffix target-suffix]
@@ -303,7 +313,7 @@
         join-spec-instance (assoc join-spec :from-alias from-suffix :to-alias target-suffix)]
     join-spec-instance))
 
-(defn joins*
+(defn- joins*
   [schema db-query outer-suffix]
   (assert (vector? db-query) "Queries must be vectors.")
   (reduce (fn [{:keys [joins current-suffix] :as acc} i]
@@ -315,21 +325,16 @@
                           :joins          (-> joins
                                               (conj (join schema i outer-suffix current-suffix))
                                               (into (:joins (joins* schema subquery current-suffix))))})
-              :else acc
-              )) {:joins [] :current-suffix (next-suffix outer-suffix true)} db-query))
+              :else acc))
+          {:joins [] :current-suffix (next-suffix outer-suffix true)} db-query))
 
-(defn joins
+(defn- joins
   "Convert an om query into a sequence of join specifications. Follows alias sequence of columns so that join aliasing will
   match that of the columns."
   [schema om-query]
   (:joins (joins* schema (db-query schema om-query) "1")))
 
-(defn kw->sql
-  "Convert a keyword to the name we use in SQL. Replaces - with _."
-  [kw]
-  (-> kw str (str/replace #"[-]" "_")))
-
-(defn left-join
+(defn- left-join
   "Given a join spec, emit a SQL LEFT JOIN clause."
   [spec]
   (let [{:keys [from to from-alias to-alias]} spec
@@ -338,12 +343,11 @@
         to-table (kw->sql (namespace to))
         to-alias (kw->sql (str to-table "." to-alias))
         from-col (kw->sql (name from))
-        to-col (kw->sql (name to))
-        ]
+        to-col (kw->sql (name to))]
     (format "LEFT JOIN %s \"%s\" ON \"%s\".%s = \"%s\".%s"
             to-table to-alias from-alias from-col to-alias to-col)))
 
-(defn join-clause
+(defn- join-clause
   "Given the columns and join specs returns an SQL FROM clause"
   [cols join-specs]
   (let [table-name #(str/replace % #"[.].*$" "")
@@ -354,14 +358,15 @@
         left-joins (str/join " " (map left-join join-specs))]
     (str initial-from " " left-joins)))
 
-(defn col->sel
-  "Convert a suffixed column selection keyword to a properly aliased SQL column selector."
+(defn- col->sel
+  "Convert a suffixed column selection keyword to a properly aliased SQL column selector.
+  E.g. :a/b => 'a.b AS \"a/b\"'"
   [col]
   (let [nspc (kw->sql (namespace col))
         col-name (kw->sql (name col))]
     (format "\"%s\".%s AS \"%s/%s\"" nspc col-name nspc col-name)))
 
-(defn select-clause
+(defn- select-clause
   "Given a sequence of suffixed column keywords, returns the complete SQL selection items clause."
   [cols]
   (str/join ", " (map col->sel cols)))
@@ -373,4 +378,112 @@
   (let [cols (columns schema om-query)
         join-specs (joins schema om-query)]
     (str "SELECT " (select-clause cols) " " (join-clause cols join-specs))))
+
+(defn query-ref-rules
+  [schema om-query] [])
+
+(defn query-replacement-rules
+  [schema om-query]
+  (let [cols (columns schema om-query)
+        without-suffix (fn [kw] (keyword (table-name (namespace kw)) (name kw)))
+        cols-sans-suffix (into #{} (map without-suffix cols))]
+    ; TODO: remaps for pseudocolumns in relations
+    ; TODO: remaps back from db -> om
+    {}))
+
+
+(defn query-entities
+  "Returns the names of all of the tables that are being queried in the given om-query."
+  [schema om-query]
+  (let [cols (columns schema om-query)]
+    (into #{} (map table-name cols))))
+
+(defn query-top-key [schema om-query]
+  (keyword (table-for-query schema om-query) "id"))
+
+(defn omquery+sqlresult->tree
+  "Given the database schema, an om query, and the table data returned from the
+  database (using the `om->sql` query): returns the desired tree of response data."
+  [schema om-query sql-result]
+  (let [tree-rules {:refs     (query-ref-rules schema om-query)
+                    :replace  (query-replacement-rules schema om-query)
+                    :codecs   (:codecs schema)
+                    :entities (query-entities schema om-query)
+                    :id-key   (query-top-key schema om-query)}]
+    (table->tree sql-result om-query tree-rules)))
+
+
+
+;;; NEW IDEA:
+; Each level of a query is really selecting 1+ rows of a particular table, which are then linked
+; to some other table(s). If done as separate queries should issue no more queries than there are
+; joins. Joins to the same table multiple times at a level could be combined. So, do a recursive
+; parse of the Om query, and run the queries for each level as we go:
+
+; [:db/id :tag/type] => SELECT id, type FROM tag
+; [:db/id {:tag/name [:db/id :translation/value :translation/locale]}] =>
+; WITH one-to-many config indicating name implies name_id on the tag table:
+;   SELECT id, name_id FROM tag => a set of name IDs ids
+;   SELECT id, value, locale FROM translation WHERE id IN (ids)
+; integrate all objects into a running Om db
+
+; Kinds of joins:
+; 1. to-many via a key on the foriegn table that matches this tables id
+; 2. to-one or to-many via an id in a column on this table that points to the foreign table, where the target key
+; make have more than one rot
+; 3. to-many with a join table, where the join table has two IDs: one pointing to this table, and one
+; pointing to the foreign table
+; 4. Like 3, but the foreign table is this table (e.g. parent of the same kind)
+
+(defn- join-column [joins item]
+  (let [join (get joins item)
+        prop (get join :db-prop)
+        prop-table (table-name prop)
+        from-table (table-name (:from join))]
+    (cond
+      (contains? join :select) (:select join)
+      (= from-table prop-table) (:from join)
+      :else nil)))
+
+(defn- top-columns*
+  [schema db-query]
+  (assert (vector? db-query) "Query input must be a vector")
+  (reduce (fn [{:keys [cols] :as acc} item]
+            (let [table (table-for-query schema db-query)
+                  joins-by-dbprop (into {} (map (fn [item] [(:db-prop item) item]) (:joins schema)))]
+              (cond
+                (= :db/id item) (assoc acc :cols (conj cols (keyword table "id")))
+                (keyword? item) (assoc acc :cols (conj cols item))
+                (map? item) (let [k (first (keys item))
+                                  c (join-column joins-by-dbprop k)]
+                              (if c
+                                (assoc acc :cols (conj cols c))
+                                acc))
+                :else acc)))
+          {:cols []} db-query))
+
+(defn- top-columns
+  "Get all of the properly suffixed SQL columns that must be queried in order to satisfy the given om-query"
+  [schema om-query]
+  (:cols (top-columns* schema (db-query schema om-query))))
+
+(defn- top-joins*
+  [schema db-query]
+  (assert (vector? db-query) "Query input must be a vector")
+  (reduce (fn [acc item]
+            (if (map? item)
+              (let [joins-by-dbprop (into {} (map (fn [item] [(:db-prop item) item]) (:joins schema)))
+                   k (first (keys item))
+                   join (get joins-by-dbprop k)]
+               (if (and join (:select join))
+                 (conj acc join)
+                 acc))
+              acc))
+          [] db-query))
+
+(defn top-joins
+  ""
+  [schema om-query]
+  (top-joins* schema (db-query schema om-query)))
+
 

@@ -1,4 +1,4 @@
-(ns untangled.server.sql
+(ns  untangled.server.sql
   "Support functions for dealing with SQL results in the context of Om responses"
   (:require [clojure.walk :as walk]
             [om.next :as om]
@@ -473,11 +473,11 @@
   (reduce (fn [acc item]
             (if (map? item)
               (let [joins-by-dbprop (into {} (map (fn [item] [(:db-prop item) item]) (:joins schema)))
-                   k (first (keys item))
-                   join (get joins-by-dbprop k)]
-               (if (and join (:select join))
-                 (conj acc join)
-                 acc))
+                    k (first (keys item))
+                    join (get joins-by-dbprop k)]
+                (if (and join (:select join))
+                  (conj acc join)
+                  acc))
               acc))
           [] db-query))
 

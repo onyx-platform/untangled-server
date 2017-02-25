@@ -1,4 +1,4 @@
-(ns untangled.server.sql-spec
+(ns ^:focused untangled.server.sql-spec
   (:require [untangled.server.sql :as sql]
             [untangled-spec.core :refer [specification component behavior assertions when-mocking]]
             [om.next :as om]
@@ -152,26 +152,32 @@
       "Throws an exception if the namespace of the target does not match the table under evaluation"
       (#'sql/column schema :boo/type "tag" 1) =throws=> (ExceptionInfo #".*on the wrong table.*")))
   (component "columns"
-    (assertions
-      "converts queries with joins into a sequence of aliased columns"
-      (#'sql/columns schema [:db/id :tag/type]) => [:tag.1/id :tag.1/type]
-      "converts queries with om props to proper db select props with aliases"
-      (#'sql/columns schema [:db/id :language/locale :localized-string/value]) => [:translation.1/id :translation.1/locale :translation.1/localized-string]
-      "converts queries with om joins to proper db select props with aliases"
-      (#'sql/columns schema [:db/id :tag/type
-                             {:tag/name [:db/id :language/locale :localized-string/value]}]) => [:tag.1/id :tag.1/type
-                                                                                                 :translation.1.1/id
-                                                                                                 :translation.1.1/locale
-                                                                                                 :translation.1.1/localized-string]
-      (#'sql/columns schema [:db/id :tag/type
-                             {:tag/name [:db/id :language/locale :localized-string/value]}
-                             {:tag/description [:db/id :language/locale :localized-string/value]}]) => [:tag.1/id :tag.1/type
-                                                                                                        :translation.1.1/id
-                                                                                                        :translation.1.1/locale
-                                                                                                        :translation.1.1/localized-string
-                                                                                                        :translation.1.2/id
-                                                                                                        :translation.1.2/locale
-                                                                                                        :translation.1.2/localized-string]))
+    (let [om-query [:db/id :tag/type
+                    {:tag/name [:db/id :language/locale :localized-string/value]}
+                    {:tag/description [:db/id :language/locale :localized-string/value]}
+                    {:tag/parents '...}]]
+      (assertions
+        "boo"
+        (#'sql/columns schema om-query) => [:tag.1/id :tag.1/type]
+        "converts queries with joins into a sequence of aliased columns"
+        (#'sql/columns schema [:db/id :tag/type]) => [:tag.1/id :tag.1/type]
+        "converts queries with om props to proper db select props with aliases"
+        (#'sql/columns schema [:db/id :language/locale :localized-string/value]) => [:translation.1/id :translation.1/locale :translation.1/localized-string]
+        "converts queries with om joins to proper db select props with aliases"
+        (#'sql/columns schema [:db/id :tag/type
+                               {:tag/name [:db/id :language/locale :localized-string/value]}]) => [:tag.1/id :tag.1/type
+                                                                                                   :translation.1.1/id
+                                                                                                   :translation.1.1/locale
+                                                                                                   :translation.1.1/localized-string]
+        (#'sql/columns schema [:db/id :tag/type
+                               {:tag/name [:db/id :language/locale :localized-string/value]}
+                               {:tag/description [:db/id :language/locale :localized-string/value]}]) => [:tag.1/id :tag.1/type
+                                                                                                          :translation.1.1/id
+                                                                                                          :translation.1.1/locale
+                                                                                                          :translation.1.1/localized-string
+                                                                                                          :translation.1.2/id
+                                                                                                          :translation.1.2/locale
+                                                                                                          :translation.1.2/localized-string])))
 
   (component "join"
     (assertions
@@ -217,7 +223,11 @@
     (component "om->sql"
       (assertions
         "can convert an om query to SQL"
-        (sql/om->sql schema query) => "SELECT \"tag.1\".id AS \"tag.1/id\", \"tag.1\".type AS \"tag.1/type\", \"translation.1.1\".id AS \"translation.1.1/id\", \"translation.1.1\".localized_string AS \"translation.1.1/localized_string\", \"translation.1.2\".id AS \"translation.1.2/id\", \"translation.1.2\".localized_string AS \"translation.1.2/localized_string\" FROM tag \"tag.1\" LEFT JOIN translation \"translation.1.1\" ON \"tag.1\".name_id = \"translation.1.1\".i18n_string_id LEFT JOIN translation \"translation.1.2\" ON \"tag.1\".description_id = \"translation.1.2\".i18n_string_id"))))
+        (sql/om->sql schema query) =>
+        (str "SELECT \"tag.1\".id AS \"tag.1/id\", \"tag.1\".type AS \"tag.1/type\", \"translation.1.1\".id AS \"translation.1.1/id\", \"translation.1.1\".localized_string AS \"translation.1.1/localized_string\", \"translation.1.2\".id AS \"translation.1.2/id\", \"translation.1.2\".localized_string AS \"translation.1.2/localized_string\" "
+             "FROM tag \"tag.1\" "
+             "LEFT JOIN translation \"translation.1.1\" ON \"tag.1\".name_id = \"translation.1.1\".i18n_string_id "
+             "LEFT JOIN translation \"translation.1.2\" ON \"tag.1\".description_id = \"translation.1.2\".i18n_string_id")))))
 
 
 (specification "top-columns"
@@ -233,4 +243,5 @@
   (assertions
     "gives joins for join-table ID extraction"
     (sql/top-joins schema [:db/id :tag/type {:tag/parents '...}]) => [{:db-prop :tag/parents :from :tag/id :to :tag-tag/tag-id :select :tag-tag/parent-tag-id :carinality :many}]))
+
 

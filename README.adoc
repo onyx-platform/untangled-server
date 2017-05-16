@@ -173,7 +173,7 @@ WARNING: The transit middleware is required when dealing with an untangled-clien
 (def your-server
   (usc/untangled-system
     {:components {#_...}
-     :handlers [(make-your-api-module) #_...]})) ;;<1>
+     :modules [(make-your-api-module) #_...]})) ;;<1>
 ----
 <1> You can have any number of modules, they compose left to right (ie: they are tried in that order).
 <2> Modules must have a unique `system-key`.

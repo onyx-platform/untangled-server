@@ -1,9 +1,9 @@
-(defproject navis/untangled-server "0.7.1-SNAPSHOT"
+(defproject org.onyxplatform/untangled-server "0.1.0"
   :description "Library for creating Untangled web servers"
   :url ""
   :license {:name "MIT"
             :url  "https://opensource.org/licenses/MIT"}
-  :dependencies [[org.clojure/clojure "1.9.0-alpha14" :scope "provided"]
+  :dependencies [[org.clojure/clojure "1.9.0-alpha17" :scope "provided"]
                  [org.clojure/math.combinatorics "0.1.1"]
                  [org.clojure/tools.namespace "0.2.10"]
                  [org.omcljs/om "1.0.0-alpha48"]

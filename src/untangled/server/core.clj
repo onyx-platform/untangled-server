@@ -2,7 +2,7 @@
   (:require
     [com.stuartsierra.component :as component]
     [clojure.set :as set]
-    [clojure.spec :as s]
+    [clojure.spec.alpha :as s]
     [om.next.server :as om]
     [untangled.server.impl.components.web-server :as web-server]
     [untangled.server.impl.components.handler :as handler]
